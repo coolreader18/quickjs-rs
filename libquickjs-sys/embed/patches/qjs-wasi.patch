@@ -1,7 +1,7 @@
-diff --git a/quickjs-2020-04-12/Makefile b/qjs-wasi/Makefile
+diff --git a/Makefile b/Makefile
 index 88e605b..a99b970 100644
---- a/quickjs-2020-04-12/Makefile
-+++ b/qjs-wasi/Makefile
+--- a/Makefile
++++ b/Makefile
 @@ -33,6 +33,8 @@ CONFIG_LTO=y
  #CONFIG_WERROR=y
  # force 32 bit build for some utilities
@@ -46,14 +46,10 @@ index 88e605b..a99b970 100644
  
  qjscalc.c: $(QJSC) qjscalc.js
  	$(QJSC) -fbignum -c -o $@ qjscalc.js
-diff --git a/qjs-wasi/examples/hello.wasm b/qjs-wasi/examples/hello.wasm
-new file mode 100755
-index 0000000..2379e40
-Binary files /dev/null and b/qjs-wasi/examples/hello.wasm differ
-diff --git a/quickjs-2020-04-12/qjs.c b/qjs-wasi/qjs.c
+diff --git a/qjs.c b/qjs.c
 index 1c5974f..05783de 100644
---- a/quickjs-2020-04-12/qjs.c
-+++ b/qjs-wasi/qjs.c
+--- a/qjs.c
++++ b/qjs.c
 @@ -124,7 +124,7 @@ static inline size_t js_trace_malloc_usable_size(void *ptr)
      return malloc_size(ptr);
  #elif defined(_WIN32)
@@ -80,10 +76,10 @@ index 1c5974f..05783de 100644
          }
          js_std_loop(ctx);
      }
-diff --git a/quickjs-2020-04-12/qjsc.c b/qjs-wasi/qjsc.c
+diff --git a/qjsc.c b/qjsc.c
 index e2aa6ad..6eaee24 100644
---- a/quickjs-2020-04-12/qjsc.c
-+++ b/qjs-wasi/qjsc.c
+--- a/qjsc.c
++++ b/qjsc.c
 @@ -370,7 +370,7 @@ void help(void)
      exit(1);
  }
@@ -93,10 +89,10 @@ index e2aa6ad..6eaee24 100644
  
  int exec_cmd(char **argv)
  {
-diff --git a/quickjs-2020-04-12/quickjs-libc.c b/qjs-wasi/quickjs-libc.c
+diff --git a/quickjs-libc.c b/quickjs-libc.c
 index 4e6d221..d3b0a81 100644
---- a/quickjs-2020-04-12/quickjs-libc.c
-+++ b/qjs-wasi/quickjs-libc.c
+--- a/quickjs-libc.c
++++ b/quickjs-libc.c
 @@ -41,10 +41,11 @@
  #include <windows.h>
  #include <conio.h>
@@ -376,10 +372,10 @@ index 4e6d221..d3b0a81 100644
      list_for_each_safe(el, el1, &os_timers) {
          JSOSTimer *th = list_entry(el, JSOSTimer, link);
          unlink_timer(rt, th);
-diff --git a/quickjs-2020-04-12/quickjs.c b/qjs-wasi/quickjs.c
+diff --git a/quickjs.c b/quickjs.c
 index 7da7253..f9f782e 100644
---- a/quickjs-2020-04-12/quickjs.c
-+++ b/qjs-wasi/quickjs.c
+--- a/quickjs.c
++++ b/quickjs.c
 @@ -48,7 +48,7 @@
  
  #define OPTIMIZE         1
@@ -433,94 +429,3 @@ index 7da7253..f9f782e 100644
      NULL,
  #elif defined(__linux__)
      (size_t (*)(const void *))malloc_usable_size,
-diff --git a/quickjs-2020-04-12/repl.js b/qjs-wasi/repl.js
-index a5f95f5..3376811 100644
---- a/quickjs-2020-04-12/repl.js
-+++ b/qjs-wasi/repl.js
-@@ -22,7 +22,7 @@
-  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-  * THE SOFTWARE.
-  */
--"use strip";
-+"use strict";
- 
- import * as std from "std";
- import * as os from "os";
-@@ -158,7 +158,7 @@ import * as os from "os";
-         }
- 
-         /* install a Ctrl-C signal handler */
--        os.signal(os.SIGINT, sigint_handler);
-+        /* os.signal(os.SIGINT, sigint_handler); */
- 
-         /* install a handler to read stdin */
-         term_read_buf = new Uint8Array(64);
-@@ -839,7 +839,7 @@ import * as os from "os";
-                 return;
-             case -3:
-                 /* uninstall a Ctrl-C signal handler */
--                os.signal(os.SIGINT, null);
-+                /* os.signal(os.SIGINT, null); */
-                 /* uninstall the stdin read handler */
-                 os.setReadHandler(term_fd, null);
-                 return;
-diff --git a/quickjs-2020-04-12/run-test262.c b/qjs-wasi/run-test262.c
-index d5b6e81..551ec8b 100644
---- a/quickjs-2020-04-12/run-test262.c
-+++ b/qjs-wasi/run-test262.c
-@@ -40,7 +40,7 @@
- #include "quickjs-libc.h"
- 
- /* enable test262 thread support to test SharedArrayBuffer and Atomics */
--#define CONFIG_AGENT
-+/* #define CONFIG_AGENT */
- 
- #define CMD_NAME "run-test262"
- 
-@@ -352,7 +352,7 @@ void namelist_free(namelist_t *lp)
-     lp->size = 0;
- }
- 
--static int add_test_file(const char *filename, const struct stat *ptr, int flag)
-+static int add_test_file(const char *filename, const struct stat *ptr, int flag, struct FTW* buf)
- {
-     namelist_t *lp = &test_list;
-     if (has_suffix(filename, ".js") && !has_suffix(filename, "_FIXTURE.js"))
-@@ -365,7 +365,7 @@ static void enumerate_tests(const char *path)
- {
-     namelist_t *lp = &test_list;
-     int start = lp->count;
--    ftw(path, add_test_file, 100);
-+    nftw(path, add_test_file, 100, 0);
-     qsort(lp->array + start, lp->count - start, sizeof(*lp->array),
-           namelist_cmp_indirect);
- }
-@@ -438,7 +438,9 @@ typedef struct {
-     char *str;
- } AgentReport;
- 
-+#endif
- static JSValue add_helpers1(JSContext *ctx);
-+#ifdef CONFIG_AGENT
- static void add_helpers(JSContext *ctx);
- 
- static pthread_mutex_t agent_mutex = PTHREAD_MUTEX_INITIALIZER;
-@@ -648,12 +650,14 @@ static JSValue js_agent_sleep(JSContext *ctx, JSValue this_val,
-     return JS_UNDEFINED;
- }
- 
-+#endif
- static int64_t get_clock_ms(void)
- {
-     struct timespec ts;
-     clock_gettime(CLOCK_MONOTONIC, &ts);
-     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
- }
-+#ifdef CONFIG_AGENT
- 
- static JSValue js_agent_monotonicNow(JSContext *ctx, JSValue this_val,
-                                      int argc, JSValue *argv)
-diff --git a/qjs-wasi/run-test262.wasm b/qjs-wasi/run-test262.wasm
-new file mode 100755
-index 0000000..0ea0d33
-Binary files /dev/null and b/qjs-wasi/run-test262.wasm differ
