@@ -1,0 +1,526 @@
+diff --git a/quickjs-2020-04-12/Makefile b/qjs-wasi/Makefile
+index 88e605b..a99b970 100644
+--- a/quickjs-2020-04-12/Makefile
++++ b/qjs-wasi/Makefile
+@@ -33,6 +33,8 @@ CONFIG_LTO=y
+ #CONFIG_WERROR=y
+ # force 32 bit build for some utilities
+ #CONFIG_M32=y
++# Build for WASM
++CONFIG_WASI=y
+ 
+ ifdef CONFIG_DARWIN
+ # use clang instead of gcc
+@@ -55,13 +57,18 @@ OBJDIR=.obj
+ ifdef CONFIG_WIN32
+   CROSS_PREFIX=i686-w64-mingw32-
+   EXE=.exe
++else ifdef CONFIG_WASI
++  CROSS_PREFIX=wasi
++  EXE=.wasm
++  HOST_CC=cc
++  CONFIG_CLANG=y
+ else
+   CROSS_PREFIX=
+   EXE=
+ endif
+ ifdef CONFIG_CLANG
+-  HOST_CC=clang
+-  CC=$(CROSS_PREFIX)clang
++  HOST_CC ?= clang
++  CC=$(CROSS_PREFIX)$(HOST_CC)
+   CFLAGS=-g -Wall -MMD -MF $(OBJDIR)/$(@F).d
+   CFLAGS += -Wextra
+   CFLAGS += -Wno-sign-compare
+@@ -224,8 +231,13 @@ libquickjs.a: $(patsubst %.o, %.nolto.o, $(QJS_LIB_OBJS))
+ 	$(AR) rcs $@ $^
+ endif # CONFIG_LTO
+ 
++ifdef CONFIG_WASI
++repl.c: qjsc.wasm repl.js
++	wasmer run --dir . -- $< -c -o $@ -m repl.js
++else
+ repl.c: $(QJSC) repl.js
+ 	$(QJSC) -c -o $@ -m repl.js
++endif # CONFIG_WASI
+ 
+ qjscalc.c: $(QJSC) qjscalc.js
+ 	$(QJSC) -fbignum -c -o $@ qjscalc.js
+diff --git a/qjs-wasi/examples/hello.wasm b/qjs-wasi/examples/hello.wasm
+new file mode 100755
+index 0000000..2379e40
+Binary files /dev/null and b/qjs-wasi/examples/hello.wasm differ
+diff --git a/quickjs-2020-04-12/qjs.c b/qjs-wasi/qjs.c
+index 1c5974f..05783de 100644
+--- a/quickjs-2020-04-12/qjs.c
++++ b/qjs-wasi/qjs.c
+@@ -124,7 +124,7 @@ static inline size_t js_trace_malloc_usable_size(void *ptr)
+     return malloc_size(ptr);
+ #elif defined(_WIN32)
+     return _msize(ptr);
+-#elif defined(EMSCRIPTEN)
++#elif defined(EMSCRIPTEN) || defined(__wasi__)
+     return 0;
+ #elif defined(__linux__)
+     return malloc_usable_size(ptr);
+@@ -240,7 +240,7 @@ static const JSMallocFunctions trace_mf = {
+     malloc_size,
+ #elif defined(_WIN32)
+     (size_t (*)(const void *))_msize,
+-#elif defined(EMSCRIPTEN)
++#elif defined(EMSCRIPTEN) || defined(__wasi__)
+     NULL,
+ #elif defined(__linux__)
+     (size_t (*)(const void *))malloc_usable_size,
+@@ -492,6 +492,7 @@ int main(int argc, char **argv)
+         }
+         if (interactive) {
+             js_std_eval_binary(ctx, qjsc_repl, qjsc_repl_size, 0);
++            /* eval_buf(ctx, qjsc_repl, qjsc_repl_size, "<input>", JS_EVAL_TYPE_MODULE); */
+         }
+         js_std_loop(ctx);
+     }
+diff --git a/quickjs-2020-04-12/qjsc.c b/qjs-wasi/qjsc.c
+index e2aa6ad..6eaee24 100644
+--- a/quickjs-2020-04-12/qjsc.c
++++ b/qjs-wasi/qjsc.c
+@@ -370,7 +370,7 @@ void help(void)
+     exit(1);
+ }
+ 
+-#if defined(CONFIG_CC) && !defined(_WIN32)
++#if defined(CONFIG_CC) && !defined(_WIN32) && !defined(__wasi__)
+ 
+ int exec_cmd(char **argv)
+ {
+diff --git a/quickjs-2020-04-12/quickjs-libc.c b/qjs-wasi/quickjs-libc.c
+index 4e6d221..d3b0a81 100644
+--- a/quickjs-2020-04-12/quickjs-libc.c
++++ b/qjs-wasi/quickjs-libc.c
+@@ -41,10 +41,11 @@
+ #include <windows.h>
+ #include <conio.h>
+ #else
++#if !defined(__wasi__)
+ #include <dlfcn.h>
+ #include <termios.h>
+ #include <sys/ioctl.h>
+-#include <sys/wait.h>
++#endif
+ #if defined(__APPLE__)
+ typedef sig_t sighandler_t;
+ #endif
+@@ -393,7 +394,7 @@ typedef JSModuleDef *(JSInitModuleFunc)(JSContext *ctx,
+                                         const char *module_name);
+ 
+ 
+-#if defined(_WIN32)
++#if defined(_WIN32) || defined(__wasi__)
+ static JSModuleDef *js_module_loader_so(JSContext *ctx,
+                                         const char *module_name)
+ {
+@@ -470,7 +471,7 @@ int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
+         return -1;
+     if (!strchr(module_name, ':')) {
+         strcpy(buf, "file://");
+-#if !defined(_WIN32)
++#if !defined(_WIN32) && !defined(__wasi__)
+         /* realpath() cannot be used with modules compiled with qjsc
+            because the corresponding module source code is not
+            necessarily present */
+@@ -644,9 +645,11 @@ static void js_std_file_finalizer(JSRuntime *rt, JSValue val)
+     JSSTDFile *s = JS_GetOpaque(val, js_std_file_class_id);
+     if (s) {
+         if (s->f && s->close_in_finalizer) {
++#if !defined(__wasi__)
+             if (s->is_popen)
+                 pclose(s->f);
+             else
++#endif
+                 fclose(s->f);
+         }
+         js_free_rt(rt, s);
+@@ -733,6 +736,7 @@ static JSValue js_std_open(JSContext *ctx, JSValueConst this_val,
+     return JS_EXCEPTION;
+ }
+ 
++#if !defined(__wasi__)
+ static JSValue js_std_popen(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+ {
+@@ -768,6 +772,7 @@ static JSValue js_std_popen(JSContext *ctx, JSValueConst this_val,
+     JS_FreeCString(ctx, mode);
+     return JS_EXCEPTION;
+ }
++#endif
+ 
+ static JSValue js_std_fdopen(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+@@ -802,6 +807,7 @@ static JSValue js_std_fdopen(JSContext *ctx, JSValueConst this_val,
+     return JS_EXCEPTION;
+ }
+ 
++#if !defined(__wasi__)
+ static JSValue js_std_tmpfile(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv)
+ {
+@@ -813,6 +819,7 @@ static JSValue js_std_tmpfile(JSContext *ctx, JSValueConst this_val,
+         return JS_NULL;
+     return js_new_std_file(ctx, f, TRUE, FALSE);
+ }
++#endif
+ 
+ static JSValue js_std_sprintf(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv)
+@@ -873,9 +880,11 @@ static JSValue js_std_file_close(JSContext *ctx, JSValueConst this_val,
+         return JS_EXCEPTION;
+     if (!s->f)
+         return JS_ThrowTypeError(ctx, "invalid file handle");
++#if !defined(__wasi__)
+     if (s->is_popen)
+         err = js_get_errno(pclose(s->f));
+     else
++#endif
+         err = js_get_errno(fclose(s->f));
+     s->f = NULL;
+     return JS_NewInt32(ctx, err);
+@@ -1104,6 +1113,7 @@ static JSValue js_std_file_putByte(JSContext *ctx, JSValueConst this_val,
+     return JS_NewInt32(ctx, c);
+ }
+ 
++#if !defined(__wasi__)
+ /* urlGet */
+ 
+ #define URL_GET_PROGRAM "curl -s -i"
+@@ -1289,6 +1299,7 @@ static JSValue js_std_urlGet(JSContext *ctx, JSValueConst this_val,
+     JS_FreeValue(ctx, response);
+     return JS_EXCEPTION;
+ }
++#endif
+ 
+ static JSClassDef js_std_file_class = {
+     "FILE",
+@@ -1318,15 +1329,21 @@ static const JSCFunctionListEntry js_std_funcs[] = {
+     JS_CFUNC_DEF("evalScript", 1, js_evalScript ),
+     JS_CFUNC_DEF("loadScript", 1, js_loadScript ),
+     JS_CFUNC_DEF("getenv", 1, js_std_getenv ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("urlGet", 1, js_std_urlGet ),
++#endif
+     JS_CFUNC_DEF("loadFile", 1, js_std_loadFile ),
+     JS_CFUNC_DEF("strerror", 1, js_std_strerror ),
+     
+     /* FILE I/O */
+     JS_CFUNC_DEF("open", 2, js_std_open ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("popen", 2, js_std_popen ),
++#endif
+     JS_CFUNC_DEF("fdopen", 2, js_std_fdopen ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("tmpfile", 0, js_std_tmpfile ),
++#endif
+     JS_CFUNC_MAGIC_DEF("puts", 1, js_std_file_puts, 0 ),
+     JS_CFUNC_DEF("printf", 1, js_std_printf ),
+     JS_CFUNC_DEF("sprintf", 1, js_std_sprintf ),
+@@ -1495,6 +1512,7 @@ static JSValue js_os_isatty(JSContext *ctx, JSValueConst this_val,
+     return JS_NewBool(ctx, isatty(fd) == 1);
+ }
+ 
++#if !defined(__wasi__)
+ #if defined(_WIN32)
+ static JSValue js_os_ttyGetWinSize(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv)
+@@ -1591,6 +1609,7 @@ static JSValue js_os_ttySetRaw(JSContext *ctx, JSValueConst this_val,
+ }
+ 
+ #endif /* !_WIN32 */
++#endif
+ 
+ static JSValue js_os_remove(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+@@ -1688,6 +1707,7 @@ static JSValue js_os_setReadHandler(JSContext *ctx, JSValueConst this_val,
+     return JS_UNDEFINED;
+ }
+ 
++#if !defined(__wasi__)
+ static JSOSSignalHandler *find_sh(int sig_num)
+ {
+     JSOSSignalHandler *sh;
+@@ -1757,6 +1777,7 @@ static JSValue js_os_signal(JSContext *ctx, JSValueConst this_val,
+     }
+     return JS_UNDEFINED;
+ }
++#endif
+ 
+ #if defined(__linux__) || defined(__APPLE__)
+ static int64_t get_time_ms(void)
+@@ -2070,6 +2091,7 @@ static JSValue js_os_getcwd(JSContext *ctx, JSValueConst this_val,
+     }
+     return make_string_error(ctx, buf, err);
+ }
++#if !defined(__wasi__)
+ 
+ #if !defined(_WIN32)
+ 
+@@ -2108,6 +2130,7 @@ static JSValue js_os_realpath(JSContext *ctx, JSValueConst this_val,
+     }
+     return make_string_error(ctx, buf, err);
+ }
++#endif
+ 
+ static JSValue js_os_mkdir(JSContext *ctx, JSValueConst this_val,
+                            int argc, JSValueConst *argv)
+@@ -2299,6 +2322,7 @@ static JSValue js_os_readdir(JSContext *ctx, JSValueConst this_val,
+     return make_obj_error(ctx, obj, err);
+ }
+ 
++#if !defined(__wasi__)
+ static void ms_to_timeval(struct timeval *tv, uint64_t v)
+ {
+     tv->tv_sec = v / 1000;
+@@ -2441,7 +2465,9 @@ static int my_execvpe(const char *filename, char **argv, char **envp)
+         errno = EACCES;
+     return -1;
+ }
++#endif
+ 
++#if !defined(__wasi__)
+ /* exec(args[, options]) -> exitcode */
+ static JSValue js_os_exec(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv)
+@@ -2667,6 +2693,7 @@ static JSValue js_os_waitpid(JSContext *ctx, JSValueConst this_val,
+                                  JS_PROP_C_W_E);
+     return obj;
+ }    
++#endif
+ 
+ /* pipe() -> [read_fd, write_fd] or null if error */
+ static JSValue js_os_pipe(JSContext *ctx, JSValueConst this_val,
+@@ -2701,6 +2728,7 @@ static JSValue js_os_kill(JSContext *ctx, JSValueConst this_val,
+     ret = js_get_errno(kill(pid, sig));
+     return JS_NewInt32(ctx, ret);
+ }
++#endif
+ 
+ /* sleep(delay_ms) */
+ static JSValue js_os_sleep(JSContext *ctx, JSValueConst this_val,
+@@ -2718,6 +2746,7 @@ static JSValue js_os_sleep(JSContext *ctx, JSValueConst this_val,
+     return JS_NewInt32(ctx, ret);
+ }
+ 
++#if !defined(__wasi__)
+ /* dup(fd) */
+ static JSValue js_os_dup(JSContext *ctx, JSValueConst this_val,
+                          int argc, JSValueConst *argv)
+@@ -2752,6 +2781,8 @@ static JSValue js_os_dup2(JSContext *ctx, JSValueConst this_val,
+ #define OS_PLATFORM "darwin"
+ #elif defined(EMSCRIPTEN)
+ #define OS_PLATFORM "js"
++#elif defined(__wasi__)
++#define OS_PLATFORM "wasi"
+ #else
+ #define OS_PLATFORM "linux"
+ #endif
+@@ -2776,13 +2807,17 @@ static const JSCFunctionListEntry js_os_funcs[] = {
+     JS_CFUNC_MAGIC_DEF("read", 4, js_os_read_write, 0 ),
+     JS_CFUNC_MAGIC_DEF("write", 4, js_os_read_write, 1 ),
+     JS_CFUNC_DEF("isatty", 1, js_os_isatty ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("ttyGetWinSize", 1, js_os_ttyGetWinSize ),
+     JS_CFUNC_DEF("ttySetRaw", 1, js_os_ttySetRaw ),
++#endif
+     JS_CFUNC_DEF("remove", 1, js_os_remove ),
+     JS_CFUNC_DEF("rename", 2, js_os_rename ),
+     JS_CFUNC_MAGIC_DEF("setReadHandler", 2, js_os_setReadHandler, 0 ),
+     JS_CFUNC_MAGIC_DEF("setWriteHandler", 2, js_os_setReadHandler, 1 ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("signal", 2, js_os_signal ),
++#endif
+     OS_FLAG(SIGINT),
+     OS_FLAG(SIGABRT),
+     OS_FLAG(SIGFPE),
+@@ -2807,6 +2842,7 @@ static const JSCFunctionListEntry js_os_funcs[] = {
+     JS_PROP_STRING_DEF("platform", OS_PLATFORM, 0 ),
+     JS_CFUNC_DEF("getcwd", 0, js_os_getcwd ),
+ #if !defined(_WIN32)
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("chdir", 0, js_os_chdir ),
+     JS_CFUNC_DEF("realpath", 1, js_os_realpath ),
+     JS_CFUNC_DEF("mkdir", 1, js_os_mkdir ),
+@@ -2832,10 +2868,13 @@ static const JSCFunctionListEntry js_os_funcs[] = {
+     OS_FLAG(WNOHANG),
+     JS_CFUNC_DEF("pipe", 0, js_os_pipe ),
+     JS_CFUNC_DEF("kill", 2, js_os_kill ),
++#endif
+     JS_CFUNC_DEF("sleep", 1, js_os_sleep ),
++#if !defined(__wasi__)
+     JS_CFUNC_DEF("dup", 1, js_os_dup ),
+     JS_CFUNC_DEF("dup2", 2, js_os_dup2 ),
+ #endif
++#endif
+ };
+ 
+ static int js_os_init(JSContext *ctx, JSModuleDef *m)
+@@ -2925,11 +2964,13 @@ void js_std_free_handlers(JSRuntime *rt)
+         free_rw_handler(rt, rh);
+     }
+ 
++#if !defined(__wasi__)
+     list_for_each_safe(el, el1, &os_signal_handlers) {
+         JSOSSignalHandler *sh = list_entry(el, JSOSSignalHandler, link);
+         free_sh(rt, sh);
+     }
+-    
++#endif
++
+     list_for_each_safe(el, el1, &os_timers) {
+         JSOSTimer *th = list_entry(el, JSOSTimer, link);
+         unlink_timer(rt, th);
+diff --git a/quickjs-2020-04-12/quickjs.c b/qjs-wasi/quickjs.c
+index 7da7253..f9f782e 100644
+--- a/quickjs-2020-04-12/quickjs.c
++++ b/qjs-wasi/quickjs.c
+@@ -48,7 +48,7 @@
+ 
+ #define OPTIMIZE         1
+ #define SHORT_OPCODES    1
+-#if defined(EMSCRIPTEN)
++#if defined(EMSCRIPTEN) || defined(__wasi__)
+ #define DIRECT_DISPATCH  0
+ #else
+ #define DIRECT_DISPATCH  1
+@@ -60,14 +60,14 @@
+ #define MALLOC_OVERHEAD  8
+ #endif
+ 
+-#if !defined(_WIN32)
++#if !(defined(_WIN32) || defined(__wasi__))
+ /* define it if printf uses the RNDN rounding mode instead of RNDNA */
+ #define CONFIG_PRINTF_RNDN
+ #endif
+ 
+ /* define to include Atomics.* operations which depend on the OS
+    threads */
+-#if !defined(EMSCRIPTEN)
++#if !(defined(EMSCRIPTEN) || defined(__wasi__))
+ #define CONFIG_ATOMICS
+ #endif
+ 
+@@ -1505,7 +1505,7 @@ static void set_dummy_numeric_ops(JSNumericOperations *ops)
+ 
+ #endif /* CONFIG_BIGNUM */
+ 
+-#if defined(EMSCRIPTEN)
++#if defined(EMSCRIPTEN) || defined(__wasi__)
+ /* currently no stack limitation */
+ static inline uint8_t *js_get_stack_pointer(void)
+ {
+@@ -1614,7 +1614,7 @@ static inline size_t js_def_malloc_usable_size(void *ptr)
+     return malloc_size(ptr);
+ #elif defined(_WIN32)
+     return _msize(ptr);
+-#elif defined(EMSCRIPTEN)
++#elif defined(EMSCRIPTEN) || defined(__wasi__)
+     return 0;
+ #elif defined(__linux__)
+     return malloc_usable_size(ptr);
+@@ -1688,7 +1688,7 @@ static const JSMallocFunctions def_malloc_funcs = {
+     malloc_size,
+ #elif defined(_WIN32)
+     (size_t (*)(const void *))_msize,
+-#elif defined(EMSCRIPTEN)
++#elif defined(EMSCRIPTEN) || defined(__wasi__)
+     NULL,
+ #elif defined(__linux__)
+     (size_t (*)(const void *))malloc_usable_size,
+diff --git a/quickjs-2020-04-12/repl.js b/qjs-wasi/repl.js
+index a5f95f5..3376811 100644
+--- a/quickjs-2020-04-12/repl.js
++++ b/qjs-wasi/repl.js
+@@ -22,7 +22,7 @@
+  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  * THE SOFTWARE.
+  */
+-"use strip";
++"use strict";
+ 
+ import * as std from "std";
+ import * as os from "os";
+@@ -158,7 +158,7 @@ import * as os from "os";
+         }
+ 
+         /* install a Ctrl-C signal handler */
+-        os.signal(os.SIGINT, sigint_handler);
++        /* os.signal(os.SIGINT, sigint_handler); */
+ 
+         /* install a handler to read stdin */
+         term_read_buf = new Uint8Array(64);
+@@ -839,7 +839,7 @@ import * as os from "os";
+                 return;
+             case -3:
+                 /* uninstall a Ctrl-C signal handler */
+-                os.signal(os.SIGINT, null);
++                /* os.signal(os.SIGINT, null); */
+                 /* uninstall the stdin read handler */
+                 os.setReadHandler(term_fd, null);
+                 return;
+diff --git a/quickjs-2020-04-12/run-test262.c b/qjs-wasi/run-test262.c
+index d5b6e81..551ec8b 100644
+--- a/quickjs-2020-04-12/run-test262.c
++++ b/qjs-wasi/run-test262.c
+@@ -40,7 +40,7 @@
+ #include "quickjs-libc.h"
+ 
+ /* enable test262 thread support to test SharedArrayBuffer and Atomics */
+-#define CONFIG_AGENT
++/* #define CONFIG_AGENT */
+ 
+ #define CMD_NAME "run-test262"
+ 
+@@ -352,7 +352,7 @@ void namelist_free(namelist_t *lp)
+     lp->size = 0;
+ }
+ 
+-static int add_test_file(const char *filename, const struct stat *ptr, int flag)
++static int add_test_file(const char *filename, const struct stat *ptr, int flag, struct FTW* buf)
+ {
+     namelist_t *lp = &test_list;
+     if (has_suffix(filename, ".js") && !has_suffix(filename, "_FIXTURE.js"))
+@@ -365,7 +365,7 @@ static void enumerate_tests(const char *path)
+ {
+     namelist_t *lp = &test_list;
+     int start = lp->count;
+-    ftw(path, add_test_file, 100);
++    nftw(path, add_test_file, 100, 0);
+     qsort(lp->array + start, lp->count - start, sizeof(*lp->array),
+           namelist_cmp_indirect);
+ }
+@@ -438,7 +438,9 @@ typedef struct {
+     char *str;
+ } AgentReport;
+ 
++#endif
+ static JSValue add_helpers1(JSContext *ctx);
++#ifdef CONFIG_AGENT
+ static void add_helpers(JSContext *ctx);
+ 
+ static pthread_mutex_t agent_mutex = PTHREAD_MUTEX_INITIALIZER;
+@@ -648,12 +650,14 @@ static JSValue js_agent_sleep(JSContext *ctx, JSValue this_val,
+     return JS_UNDEFINED;
+ }
+ 
++#endif
+ static int64_t get_clock_ms(void)
+ {
+     struct timespec ts;
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
+ }
++#ifdef CONFIG_AGENT
+ 
+ static JSValue js_agent_monotonicNow(JSContext *ctx, JSValue this_val,
+                                      int argc, JSValue *argv)
+diff --git a/qjs-wasi/run-test262.wasm b/qjs-wasi/run-test262.wasm
+new file mode 100755
+index 0000000..0ea0d33
+Binary files /dev/null and b/qjs-wasi/run-test262.wasm differ
